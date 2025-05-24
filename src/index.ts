@@ -264,19 +264,19 @@ proxy.on('proxyReq', (proxyReq: http.ClientRequest, req: http.IncomingMessage, r
   // 移除所有 x-forwarded 和 x-real 相关的请求头
   const headers = proxyReq.getHeaders(); // 获取所有请求头
   for (const headerName in headers) {
-    if (headerName.toLowerCase().startsWith('x-forwarded-') || headerName.toLowerCase().startsWith('x-real-')) {
+    if (headerName.toLowerCase().startsWith('x-forwarded-') || headerName.toLowerCase().startsWith('x-real-') || headerName.toLowerCase() === 'accept-encoding') {
       proxyReq.removeHeader(headerName); // 使用 removeHeader 方法移除
-      log(LogLevel.VERBOSE, `已移除代理请求头: ${headerName}`);
+
     }
   }
 
-  const retryBody = requestBodies.get(req);
-  if (retryBody) {
-    // 确保设置 Content-Length 头，否则目标服务器可能无法正确解析请求体
-    proxyReq.setHeader('Content-Length', Buffer.byteLength(retryBody));
-    proxyReq.write(retryBody);
-    proxyReq.end();
-  }
+  // const retryBody = requestBodies.get(req);
+  // if (retryBody) {
+  //   // 确保设置 Content-Length 头，否则目标服务器可能无法正确解析请求体
+  //   proxyReq.setHeader('Content-Length', Buffer.byteLength(retryBody));
+  //   proxyReq.write(retryBody);
+  //   proxyReq.end();
+  // }
 });
 
 // 代理响应事件
@@ -305,7 +305,7 @@ proxy.on('proxyRes', (proxyRes: http.IncomingMessage, req: http.IncomingMessage,
     const fullResponseBody = Buffer.concat(responseBodyBuffer);
     log(LogLevel.VERBOSE, '响应体', { responseBody: fullResponseBody.toString() });
 
-    if (chunkCount === 0) {
+    if (chunkCount === 0 && proxyRes.statusCode === 200) {
       const currentRetry = requestRetryCounts.get(req) || 0;
       if (currentRetry < MAX_RETRIES) {
         dailyRetries++;
@@ -340,13 +340,13 @@ proxy.on('proxyRes', (proxyRes: http.IncomingMessage, req: http.IncomingMessage,
         }
       }
     } else { // 响应体不为空
-        const currentRetry = requestRetryCounts.get(req) || 0;
-        if (currentRetry === 0) { // 并且没有重试过
-            dailySuccess++;
-            totalSuccess++;
-            publishMqtt(`${MQTT_TOPIC_PREFIX}daily/success`, dailySuccess.toString());
-            publishMqtt(`${MQTT_TOPIC_PREFIX}total/success`, totalSuccess.toString());
-        }
+      const currentRetry = requestRetryCounts.get(req) || 0;
+      if (currentRetry === 0) { // 并且没有重试过
+        dailySuccess++;
+        totalSuccess++;
+        publishMqtt(`${MQTT_TOPIC_PREFIX}daily/success`, dailySuccess.toString());
+        publishMqtt(`${MQTT_TOPIC_PREFIX}total/success`, totalSuccess.toString());
+      }
     }
     res.end(); // 结束客户端响应
     log(LogLevel.MINIMAL, `响应流结束。`);
