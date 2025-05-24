@@ -93,8 +93,8 @@ proxy.on('proxyRes', (proxyRes: http.IncomingMessage, req: http.IncomingMessage,
       if (currentRetry < MAX_RETRIES) {
         // dailyRetries++; // 已经在 mqttService 中处理
         // totalRetries++; // 已经在 mqttService 中处理
-        publishMqtt(`${MQTT_TOPIC_PREFIX}daily/retries`, (dailyRetries + 1).toString());
-        publishMqtt(`${MQTT_TOPIC_PREFIX}total/retries`, (totalRetries + 1).toString());
+        publishMqtt(`${MQTT_TOPIC_PREFIX}daily/retries`, (dailyRetries + 1).toString(), true);
+        publishMqtt(`${MQTT_TOPIC_PREFIX}total/retries`, (totalRetries + 1).toString(), true);
         log(LogLevel.MINIMAL, `响应体为空，尝试重试 ${currentRetry + 1}/${MAX_RETRIES} 次...`);
         requestRetryCounts.set(req, currentRetry + 1);
         // 重新发起请求，proxy.on('proxyReq') 会处理请求体的写入
@@ -127,8 +127,8 @@ proxy.on('proxyRes', (proxyRes: http.IncomingMessage, req: http.IncomingMessage,
       if (currentRetry === 0) { // 并且没有重试过
         // dailySuccess++; // 已经在 mqttService 中处理
         // totalSuccess++; // 已经在 mqttService 中处理
-        publishMqtt(`${MQTT_TOPIC_PREFIX}daily/success`, (dailySuccess + 1).toString());
-        publishMqtt(`${MQTT_TOPIC_PREFIX}total/success`, (totalSuccess + 1).toString());
+        publishMqtt(`${MQTT_TOPIC_PREFIX}daily/success`, (dailySuccess + 1).toString(), true);
+        publishMqtt(`${MQTT_TOPIC_PREFIX}total/success`, (totalSuccess + 1).toString(), true);
       }
     }
     res.end(); // 结束客户端响应
@@ -144,8 +144,8 @@ export const setupProxy = (req: http.IncomingMessage, res: http.ServerResponse) 
 
   // dailyRequests++; // 已经在 mqttService 中处理
   // totalRequests++; // 已经在 mqttService 中处理
-  publishMqtt(`${MQTT_TOPIC_PREFIX}daily/requests`, (dailyRequests + 1).toString());
-  publishMqtt(`${MQTT_TOPIC_PREFIX}total/requests`, (totalRequests + 1).toString());
+  publishMqtt(`${MQTT_TOPIC_PREFIX}daily/requests`, (dailyRequests + 1).toString(), true);
+  publishMqtt(`${MQTT_TOPIC_PREFIX}total/requests`, (totalRequests + 1).toString(), true);
 
   log(LogLevel.NORMAL, '接收到请求', { method: req.method, url: req.url, headers: req.headers });
 

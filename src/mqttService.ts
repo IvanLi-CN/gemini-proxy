@@ -15,7 +15,7 @@ export let totalRequests = 0;
 export let totalRetries = 0;
 export let totalSuccess = 0;
 
-export const publishMqtt = (topic: string, value: string) => {
+export const publishMqtt = (topic: string, value: string, retain: boolean = false) => {
   if (mqttClient && mqttClient.connected) {
     mqttClient.publish(topic, value, (err) => {
       if (err) {
@@ -31,9 +31,9 @@ export const resetDailyStats = () => {
   dailyRequests = 0;
   dailyRetries = 0;
   dailySuccess = 0;
-  publishMqtt(`${MQTT_TOPIC_PREFIX}daily/requests`, '0');
-  publishMqtt(`${MQTT_TOPIC_PREFIX}daily/retries`, '0');
-  publishMqtt(`${MQTT_TOPIC_PREFIX}daily/success`, '0');
+  publishMqtt(`${MQTT_TOPIC_PREFIX}daily/requests`, '0', true);
+  publishMqtt(`${MQTT_TOPIC_PREFIX}daily/retries`, '0', true);
+  publishMqtt(`${MQTT_TOPIC_PREFIX}daily/success`, '0', true);
   console.log(chalk.green('每日统计已重置。'));
 };
 
@@ -75,6 +75,59 @@ export const initMqttService = () => {
 
     mqttClient.on('connect', () => {
       console.log(chalk.green('MQTT 客户端已连接到 Broker'));
+      if (!mqttClient) return; // 确保 mqttClient 不为 null
+
+      // 订阅统计主题以获取保留消息
+      const topics = [
+        `${MQTT_TOPIC_PREFIX}daily/requests`,
+        `${MQTT_TOPIC_PREFIX}daily/retries`,
+        `${MQTT_TOPIC_PREFIX}daily/success`,
+        `${MQTT_TOPIC_PREFIX}total/requests`,
+        `${MQTT_TOPIC_PREFIX}total/retries`,
+        `${MQTT_TOPIC_PREFIX}total/success`,
+      ];
+
+      mqttClient.subscribe(topics, (err) => {
+        if (err) {
+          console.error(chalk.red('订阅 MQTT 统计主题失败:'), err);
+        } else {
+          log(LogLevel.VERBOSE, `已订阅 MQTT 统计主题: ${topics.join(', ')}`);
+        }
+      });
+    });
+
+    mqttClient.on('message', (topic, message) => {
+      if (!mqttClient) return; // 确保 mqttClient 不为 null
+      const value = parseInt(message.toString(), 10);
+      if (isNaN(value)) {
+        console.warn(chalk.yellow(`收到非数字的 MQTT 统计消息: ${topic} = ${message.toString()}`));
+        return;
+      }
+
+      switch (topic) {
+        case `${MQTT_TOPIC_PREFIX}daily/requests`:
+          dailyRequests = value;
+          break;
+        case `${MQTT_TOPIC_PREFIX}daily/retries`:
+          dailyRetries = value;
+          break;
+        case `${MQTT_TOPIC_PREFIX}daily/success`:
+          dailySuccess = value;
+          break;
+        case `${MQTT_TOPIC_PREFIX}total/requests`:
+          totalRequests = value;
+          break;
+        case `${MQTT_TOPIC_PREFIX}total/retries`:
+          totalRetries = value;
+          break;
+        case `${MQTT_TOPIC_PREFIX}total/success`:
+          totalSuccess = value;
+          break;
+        default:
+          log(LogLevel.VERBOSE, `收到未知 MQTT 统计主题: ${topic} = ${message.toString()}`);
+          break;
+      }
+      log(LogLevel.VERBOSE, `MQTT 统计数据已更新: ${topic} = ${value}`);
     });
 
     mqttClient.on('error', (err) => {
