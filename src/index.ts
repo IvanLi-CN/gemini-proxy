@@ -1,4 +1,4 @@
-import { colorize } from 'json-colorizer';
+import prettyjson from 'prettyjson';
 import http from 'http';
 import https from 'https'; // 导入 https 模块
 import httpProxy from 'http-proxy';
@@ -6,13 +6,20 @@ import net from 'net';
 import chalk from 'chalk';
 import minimist from 'minimist'; // 导入 minimist
 
+enum LogLevel {
+  MINIMAL = 'minimal',
+  NORMAL = 'normal',
+  VERBOSE = 'verbose',
+}
+
 const argv = minimist(process.argv.slice(2), {
   alias: {
     p: 'port',
     h: 'host',
     r: 'maxRetries', // 'r' for retries
     i: 'targetIp',   // 'i' for IP
-    d: 'targetDomain' // 'd' for domain
+    d: 'targetDomain', // 'd' for domain
+    l: 'logLevel' // 'l' for logLevel
   }
 });
 
@@ -26,6 +33,59 @@ const getConfig = (envVar: string, argName: string, defaultValue: string | numbe
     return { value: typeof defaultValue === 'number' ? Number(process.env[envVar]) : String(process.env[envVar]), isDefault: false };
   }
   return { value: defaultValue, isDefault: true }; // 默认值
+};
+
+const log = (level: LogLevel, message: string, data?: any) => {
+  const levels = [LogLevel.MINIMAL, LogLevel.NORMAL, LogLevel.VERBOSE];
+  const currentLevelIndex = levels.indexOf(LOG_LEVEL);
+  const messageLevelIndex = levels.indexOf(level);
+
+  if (messageLevelIndex <= currentLevelIndex) {
+    console.log(chalk.blue(`\n--- ${message} ---`));
+    if (data) {
+      if (data.method) console.log(chalk.green(`方法: ${data.method}`));
+      if (data.url) console.log(chalk.green(`URL: ${data.url}`));
+      if (data.statusCode) console.log(chalk.magenta(`状态码: ${data.statusCode}`));
+      if (data.headers) {
+        if (level === LogLevel.NORMAL || level === LogLevel.VERBOSE) {
+          console.log(chalk.green(`请求头:`));
+          for (const key in data.headers) {
+            if (key.toLowerCase() === 'x-goog-api-key') {
+              console.log(chalk.cyan(`  ${key}: ${data.headers[key]?.slice(0, 5)}...`));
+            } else {
+              console.log(chalk.cyan(`  ${key}: ${data.headers[key]}`));
+            }
+          }
+        }
+      }
+      if (data.responseHeaders) {
+        if (level === LogLevel.NORMAL || level === LogLevel.VERBOSE) {
+          console.log(chalk.magenta(`响应头:`));
+          for (const key in data.responseHeaders) {
+            console.log(chalk.yellow(`  ${key}: ${data.responseHeaders[key]}`));
+          }
+        }
+      }
+      if (data.requestBody && level === LogLevel.VERBOSE) {
+        console.log(chalk.blue(`\n--- 请求体 ---`));
+        try {
+          const jsonContent = JSON.parse(data.requestBody);
+          console.log(prettyjson.render(jsonContent));
+        } catch (e) {
+          console.log(data.requestBody);
+        }
+      }
+      if (data.responseBody && level === LogLevel.VERBOSE) {
+        console.log(chalk.magenta(`响应体:`));
+        try {
+          const jsonContent = JSON.parse(data.responseBody);
+          console.log(prettyjson.render(jsonContent));
+        } catch (e) {
+          console.log(data.responseBody);
+        }
+      }
+    }
+  }
 };
 
 let targetIpConfig = getConfig('TARGET_IP', 'targetIp', 'example.com');
@@ -45,6 +105,7 @@ const TARGET_PORT = getConfig('TARGET_PORT', 'targetPort', 443).value as number;
 const PORT = getConfig('PORT', 'port', 25055).value as number; // PROXY_PORT 更名为 PORT
 const HOST = getConfig('HOST', 'host', '0.0.0.0').value as string; // 新增 HOST
 const MAX_RETRIES = getConfig('MAX_RETRIES', 'maxRetries', 9).value as number;
+const LOG_LEVEL = getConfig('LOG_LEVEL', 'logLevel', LogLevel.NORMAL).value as LogLevel;
 const requestRetryCounts = new Map<http.IncomingMessage, number>();
 const requestBodies = new Map<http.IncomingMessage, Buffer>(); // 用于存储请求体
 
@@ -82,17 +143,7 @@ proxy.on('error', (err: Error, req: http.IncomingMessage, res: http.ServerRespon
 const server = http.createServer((req, res) => {
   requestRetryCounts.delete(req); // 清除当前请求的重试计数
   requestBodies.delete(req); // 清除当前请求的请求体
-  console.log(chalk.blue(`\n--- 接收到请求 ---`));
-  console.log(chalk.green(`方法: ${req.method}`));
-  console.log(chalk.green(`URL: ${req.url}`));
-  console.log(chalk.green(`请求头:`));
-  for (const key in req.headers) {
-    if (key.toLowerCase() === 'x-goog-api-key') {
-      console.log(chalk.cyan(`  ${key}: ${req.headers[key]?.slice(0, 5)}...`));
-    } else {
-      console.log(chalk.cyan(`  ${key}: ${req.headers[key]}`));
-    }
-  }
+  log(LogLevel.NORMAL, '接收到请求', { method: req.method, url: req.url, headers: req.headers });
 
   // 处理 CORS 预检请求
   if (req.method === 'OPTIONS') {
@@ -115,11 +166,7 @@ const server = http.createServer((req, res) => {
   req.on('end', () => {
     const fullRequestBody = Buffer.concat(requestBodyBuffer);
     requestBodies.set(req, fullRequestBody);
-
-    // 打印刚刚保存的请求体
-    // const content = fullRequestBody.toString();
-    // console.log(chalk.blue(`\n--- 保存的请求体 ---`));
-    // console.log(content);
+    log(LogLevel.VERBOSE, '请求体', { requestBody: fullRequestBody.toString() });
   });
 
 
@@ -152,16 +199,10 @@ proxy.on('proxyReq', (proxyReq: http.ClientRequest, req: http.IncomingMessage, r
 
 // 代理响应事件
 proxy.on('proxyRes', (proxyRes: http.IncomingMessage, req: http.IncomingMessage, res: http.ServerResponse) => {
-  console.log(chalk.blue(`\n--- 代理响应 ---`));
-  console.log(chalk.magenta(`状态码: ${proxyRes.statusCode}`));
-  console.log(chalk.magenta(`响应头:`));
-  for (const key in proxyRes.headers) {
-    console.log(chalk.yellow(`  ${key}: ${proxyRes.headers[key]}`));
-  }
-
-  console.log(chalk.magenta(`响应体:`));
+  log(LogLevel.NORMAL, '响应完成', { statusCode: proxyRes.statusCode, responseHeaders: proxyRes.headers });
 
   let chunkCount = 0;
+  let responseBodyBuffer: Buffer[] = [];
 
   // 手动转发响应头
   if (!res.headersSent) {
@@ -173,25 +214,19 @@ proxy.on('proxyRes', (proxyRes: http.IncomingMessage, req: http.IncomingMessage,
 
   // 复制响应流并打印响应体
   proxyRes.on('data', (chunk: Buffer) => {
-    // let content = chunk.toString();
-    // try {
-    //   const jsonContent = JSON.parse(content);
-    //   content = colorize(JSON.stringify(jsonContent));
-    // } catch (e) {
-    //   // Not a JSON, keep as is
-    // }
-
-    // console.log(chalk.bgGray(`${chunkCount}`.padStart(3, ' ')), ' ', chalk.cyan(chunk.byteLength), '\t', content);
-    console.log(chalk.bgGray(`${chunkCount}`.padStart(3, ' ')), ' ', chalk.cyan(chunk.byteLength));
+    responseBodyBuffer.push(chunk);
     chunkCount++;
     res.write(chunk); // 直接将数据块写入客户端响应
   });
 
   proxyRes.on('end', () => {
+    const fullResponseBody = Buffer.concat(responseBodyBuffer);
+    log(LogLevel.VERBOSE, '响应体', { responseBody: fullResponseBody.toString() });
+
     if (chunkCount === 0) {
       const currentRetry = requestRetryCounts.get(req) || 0;
       if (currentRetry < MAX_RETRIES) {
-        console.log(chalk.yellow(`  响应体为空，尝试重试 ${currentRetry + 1}/${MAX_RETRIES} 次...`));
+        log(LogLevel.MINIMAL, `响应体为空，尝试重试 ${currentRetry + 1}/${MAX_RETRIES} 次...`);
         requestRetryCounts.set(req, currentRetry + 1);
         // 重新发起请求，proxy.on('proxyReq') 会处理请求体的写入
         setTimeout(() => {
@@ -220,7 +255,7 @@ proxy.on('proxyRes', (proxyRes: http.IncomingMessage, req: http.IncomingMessage,
       }
     }
     res.end(); // 结束客户端响应
-    console.log(chalk.yellow(`  响应流结束。`));
+    log(LogLevel.MINIMAL, `响应流结束。`);
   });
 });
 
