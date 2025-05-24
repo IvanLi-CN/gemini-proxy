@@ -5,6 +5,7 @@ import httpProxy from 'http-proxy';
 import net from 'net';
 import chalk from 'chalk';
 import minimist from 'minimist'; // 导入 minimist
+import mqtt from 'mqtt';
 
 enum LogLevel {
   MINIMAL = 'minimal',
@@ -106,6 +107,72 @@ const PORT = getConfig('PORT', 'port', 25055).value as number; // PROXY_PORT 更
 const HOST = getConfig('HOST', 'host', '0.0.0.0').value as string; // 新增 HOST
 const MAX_RETRIES = getConfig('MAX_RETRIES', 'maxRetries', 9).value as number;
 const LOG_LEVEL = getConfig('LOG_LEVEL', 'logLevel', LogLevel.NORMAL).value as LogLevel;
+
+const MQTT_BROKER_URL_CONFIG = getConfig('MQTT_BROKER_URL', 'mqttBrokerUrl', '');
+const MQTT_USERNAME_CONFIG = getConfig('MQTT_USERNAME', 'mqttUsername', '');
+const MQTT_PASSWORD_CONFIG = getConfig('MQTT_PASSWORD', 'mqttPassword', '');
+
+const MQTT_BROKER_URL = MQTT_BROKER_URL_CONFIG.value as string;
+const MQTT_USERNAME = MQTT_USERNAME_CONFIG.value as string;
+const MQTT_PASSWORD = MQTT_PASSWORD_CONFIG.value as string;
+
+let mqttClient: mqtt.MqttClient | null = null;
+const MQTT_TOPIC_PREFIX = 'gemini-proxy/stats/';
+
+if (MQTT_BROKER_URL) {
+  const mqttOptions: mqtt.IClientOptions = {
+    clean: true, // clean session
+    connectTimeout: 4000, // 连接超时
+    reconnectPeriod: 1000, // 重连周期
+  };
+
+  if (MQTT_USERNAME) {
+    mqttOptions.username = MQTT_USERNAME;
+  }
+  if (MQTT_PASSWORD) {
+    mqttOptions.password = MQTT_PASSWORD;
+  }
+
+  mqttClient = mqtt.connect(MQTT_BROKER_URL, mqttOptions);
+
+  mqttClient.on('connect', () => {
+    console.log(chalk.green('MQTT 客户端已连接到 Broker'));
+  });
+
+  mqttClient.on('error', (err) => {
+    console.error(chalk.red('MQTT 客户端错误:'), err);
+  });
+
+  mqttClient.on('offline', () => {
+    console.warn(chalk.yellow('MQTT 客户端离线。'));
+  });
+
+  mqttClient.on('reconnect', () => {
+    console.log(chalk.blue('MQTT 客户端正在重连...'));
+  });
+} else {
+  console.warn(chalk.yellow('未配置 MQTT_BROKER_URL，将跳过 MQTT 统计。'));
+}
+
+let dailyRequests = 0;
+let dailyRetries = 0;
+let dailySuccess = 0;
+let totalRequests = 0;
+let totalRetries = 0;
+let totalSuccess = 0;
+
+const publishMqtt = (topic: string, value: string) => {
+  if (mqttClient && mqttClient.connected) {
+    mqttClient.publish(topic, value, (err) => {
+      if (err) {
+        console.error(chalk.red(`发布 MQTT 消息失败 (${topic}):`), err);
+      } else {
+        log(LogLevel.VERBOSE, `MQTT 消息已发布: ${topic} = ${value}`);
+      }
+    });
+  }
+};
+
 const requestRetryCounts = new Map<http.IncomingMessage, number>();
 const requestBodies = new Map<http.IncomingMessage, Buffer>(); // 用于存储请求体
 
@@ -143,6 +210,12 @@ proxy.on('error', (err: Error, req: http.IncomingMessage, res: http.ServerRespon
 const server = http.createServer((req, res) => {
   requestRetryCounts.delete(req); // 清除当前请求的重试计数
   requestBodies.delete(req); // 清除当前请求的请求体
+
+  dailyRequests++;
+  totalRequests++;
+  publishMqtt(`${MQTT_TOPIC_PREFIX}daily/requests`, dailyRequests.toString());
+  publishMqtt(`${MQTT_TOPIC_PREFIX}total/requests`, totalRequests.toString());
+
   log(LogLevel.NORMAL, '接收到请求', { method: req.method, url: req.url, headers: req.headers });
 
   // 处理 CORS 预检请求
@@ -226,6 +299,10 @@ proxy.on('proxyRes', (proxyRes: http.IncomingMessage, req: http.IncomingMessage,
     if (chunkCount === 0) {
       const currentRetry = requestRetryCounts.get(req) || 0;
       if (currentRetry < MAX_RETRIES) {
+        dailyRetries++;
+        totalRetries++;
+        publishMqtt(`${MQTT_TOPIC_PREFIX}daily/retries`, dailyRetries.toString());
+        publishMqtt(`${MQTT_TOPIC_PREFIX}total/retries`, totalRetries.toString());
         log(LogLevel.MINIMAL, `响应体为空，尝试重试 ${currentRetry + 1}/${MAX_RETRIES} 次...`);
         requestRetryCounts.set(req, currentRetry + 1);
         // 重新发起请求，proxy.on('proxyReq') 会处理请求体的写入
@@ -253,11 +330,50 @@ proxy.on('proxyRes', (proxyRes: http.IncomingMessage, req: http.IncomingMessage,
           res.end('目标服务器响应体为空且重试失败。');
         }
       }
+    } else { // 响应体不为空
+        const currentRetry = requestRetryCounts.get(req) || 0;
+        if (currentRetry === 0) { // 并且没有重试过
+            dailySuccess++;
+            totalSuccess++;
+            publishMqtt(`${MQTT_TOPIC_PREFIX}daily/success`, dailySuccess.toString());
+            publishMqtt(`${MQTT_TOPIC_PREFIX}total/success`, totalSuccess.toString());
+        }
     }
     res.end(); // 结束客户端响应
     log(LogLevel.MINIMAL, `响应流结束。`);
   });
 });
+
+const resetDailyStats = () => {
+  dailyRequests = 0;
+  dailyRetries = 0;
+  dailySuccess = 0;
+  publishMqtt(`${MQTT_TOPIC_PREFIX}daily/requests`, '0');
+  publishMqtt(`${MQTT_TOPIC_PREFIX}daily/retries`, '0');
+  publishMqtt(`${MQTT_TOPIC_PREFIX}daily/success`, '0');
+  console.log(chalk.green('每日统计已重置。'));
+};
+
+// 计算到下一个午夜的毫秒数
+const scheduleDailyReset = () => {
+  const now = new Date();
+  const nextMidnight = new Date(now);
+  nextMidnight.setDate(now.getDate() + 1);
+  nextMidnight.setHours(0, 0, 0, 0); // 设置为下一个午夜 00:00:00.000
+
+  const timeToNextMidnight = nextMidnight.getTime() - now.getTime();
+  console.log(chalk.blue(`下一次每日统计重置将在 ${timeToNextMidnight / 1000 / 60 / 60} 小时后进行。`));
+
+  setTimeout(() => {
+    resetDailyStats();
+    // 每天重复调度
+    setInterval(resetDailyStats, 24 * 60 * 60 * 1000);
+  }, timeToNextMidnight);
+};
+
+if (mqttClient) { // 只有在 MQTT 客户端初始化成功后才调度每日重置
+  scheduleDailyReset();
+}
 
 server.listen(PORT, HOST, () => {
   console.log(chalk.green(`代理服务器正在监听 http://${HOST}:${PORT}，代理到 https://${TARGET_IP}:${TARGET_PORT} (Host: ${TARGET_DOMAIN})`));
