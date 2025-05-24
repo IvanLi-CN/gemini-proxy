@@ -9,11 +9,19 @@ let dailyResetInterval: NodeJS.Timeout | null = null; // 用于存储 setInterva
 export const MQTT_TOPIC_PREFIX = 'gemini-proxy/stats/';
 
 export let dailyRequests = 0;
-export let dailyRetries = 0;
-export let dailySuccess = 0;
 export let totalRequests = 0;
-export let totalRetries = 0;
-export let totalSuccess = 0;
+export const dailySuccessByRetries: Map<number, number> = new Map(); // key: retry count, value: success count
+export const totalSuccessByRetries: Map<number, number> = new Map();
+export let dailyFailures = 0;
+export let totalFailures = 0;
+
+const incrementMapStat = (map: Map<number, number>, key: number) => {
+    map.set(key, (map.get(key) || 0) + 1);
+};
+
+const setMapStat = (map: Map<number, number>, key: number, value: number) => {
+    map.set(key, value);
+};
 
 export const publishMqtt = (topic: string, value: string, retain: boolean = false) => {
   if (mqttClient && mqttClient.connected) {
@@ -29,11 +37,14 @@ export const publishMqtt = (topic: string, value: string, retain: boolean = fals
 
 export const resetDailyStats = () => {
   dailyRequests = 0;
-  dailyRetries = 0;
-  dailySuccess = 0;
+  dailySuccessByRetries.clear();
+  dailyFailures = 0;
   publishMqtt(`${MQTT_TOPIC_PREFIX}daily/requests`, '0', true);
-  publishMqtt(`${MQTT_TOPIC_PREFIX}daily/retries`, '0', true);
-  publishMqtt(`${MQTT_TOPIC_PREFIX}daily/success`, '0', true);
+  // 清空所有 daily/success/{retryCount} 主题
+  for (let i = 0; i <= 20; i++) { // 假设最大重试次数为20，需要根据实际配置调整
+    publishMqtt(`${MQTT_TOPIC_PREFIX}daily/success/${i}`, '0', true);
+  }
+  publishMqtt(`${MQTT_TOPIC_PREFIX}daily/failures`, '0', true);
   console.log(chalk.green('每日统计已重置。'));
 };
 
@@ -80,12 +91,15 @@ export const initMqttService = () => {
       // 订阅统计主题以获取保留消息
       const topics = [
         `${MQTT_TOPIC_PREFIX}daily/requests`,
-        `${MQTT_TOPIC_PREFIX}daily/retries`,
-        `${MQTT_TOPIC_PREFIX}daily/success`,
         `${MQTT_TOPIC_PREFIX}total/requests`,
-        `${MQTT_TOPIC_PREFIX}total/retries`,
-        `${MQTT_TOPIC_PREFIX}total/success`,
+        `${MQTT_TOPIC_PREFIX}daily/failures`,
+        `${MQTT_TOPIC_PREFIX}total/failures`,
       ];
+      // 动态添加 daily/success/{retryCount} 和 total/success/{retryCount} 主题
+      for (let i = 0; i <= 20; i++) { // 假设最大重试次数为20
+        topics.push(`${MQTT_TOPIC_PREFIX}daily/success/${i}`);
+        topics.push(`${MQTT_TOPIC_PREFIX}total/success/${i}`);
+      }
 
       mqttClient.subscribe(topics, (err) => {
         if (err) {
@@ -108,23 +122,35 @@ export const initMqttService = () => {
         case `${MQTT_TOPIC_PREFIX}daily/requests`:
           dailyRequests = value;
           break;
-        case `${MQTT_TOPIC_PREFIX}daily/retries`:
-          dailyRetries = value;
-          break;
-        case `${MQTT_TOPIC_PREFIX}daily/success`:
-          dailySuccess = value;
-          break;
         case `${MQTT_TOPIC_PREFIX}total/requests`:
           totalRequests = value;
           break;
-        case `${MQTT_TOPIC_PREFIX}total/retries`:
-          totalRetries = value;
+        case `${MQTT_TOPIC_PREFIX}daily/failures`:
+          dailyFailures = value;
           break;
-        case `${MQTT_TOPIC_PREFIX}total/success`:
-          totalSuccess = value;
+        case `${MQTT_TOPIC_PREFIX}total/failures`:
+          totalFailures = value;
           break;
         default:
-          log(LogLevel.VERBOSE, `收到未知 MQTT 统计主题: ${topic} = ${message.toString()}`);
+          // 处理 daily/success/{retryCount} 和 total/success/{retryCount}
+          const dailySuccessPrefix = `${MQTT_TOPIC_PREFIX}daily/success/`;
+          const totalSuccessPrefix = `${MQTT_TOPIC_PREFIX}total/success/`;
+
+          if (topic.startsWith(dailySuccessPrefix)) {
+            const retryCountStr = topic.substring(dailySuccessPrefix.length);
+            const retryCount = parseInt(retryCountStr, 10);
+            if (!isNaN(retryCount)) {
+              setMapStat(dailySuccessByRetries, retryCount, value);
+            }
+          } else if (topic.startsWith(totalSuccessPrefix)) {
+            const retryCountStr = topic.substring(totalSuccessPrefix.length);
+            const retryCount = parseInt(retryCountStr, 10);
+            if (!isNaN(retryCount)) {
+              setMapStat(totalSuccessByRetries, retryCount, value);
+            }
+          } else {
+            log(LogLevel.VERBOSE, `收到未知 MQTT 统计主题: ${topic} = ${message.toString()}`);
+          }
           break;
       }
       log(LogLevel.VERBOSE, `MQTT 统计数据已更新: ${topic} = ${value}`);

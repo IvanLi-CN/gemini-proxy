@@ -6,7 +6,7 @@ import chalk from 'chalk';
 import { TARGET_IP, TARGET_DOMAIN, TARGET_PORT, MAX_RETRIES } from './config';
 import { log } from './logger';
 import { LogLevel } from './config';
-import { publishMqtt, dailyRetries, totalRetries, dailySuccess, totalSuccess, dailyRequests, totalRequests, MQTT_TOPIC_PREFIX } from './mqttService';
+import { publishMqtt, dailyRequests, totalRequests, dailySuccessByRetries, totalSuccessByRetries, dailyFailures, totalFailures, MQTT_TOPIC_PREFIX } from './mqttService';
 
 const requestRetryCounts = new Map<http.IncomingMessage, number>();
 const requestBodies = new Map<http.IncomingMessage, Buffer>(); // 用于存储请求体
@@ -91,10 +91,6 @@ proxy.on('proxyRes', (proxyRes: http.IncomingMessage, req: http.IncomingMessage,
     if (chunkCount === 0 && proxyRes.statusCode === 200) {
       const currentRetry = requestRetryCounts.get(req) || 0;
       if (currentRetry < MAX_RETRIES) {
-        // dailyRetries++; // 已经在 mqttService 中处理
-        // totalRetries++; // 已经在 mqttService 中处理
-        publishMqtt(`${MQTT_TOPIC_PREFIX}daily/retries`, (dailyRetries + 1).toString(), true);
-        publishMqtt(`${MQTT_TOPIC_PREFIX}total/retries`, (totalRetries + 1).toString(), true);
         log(LogLevel.MINIMAL, `响应体为空，尝试重试 ${currentRetry + 1}/${MAX_RETRIES} 次...`);
         requestRetryCounts.set(req, currentRetry + 1);
         // 重新发起请求，proxy.on('proxyReq') 会处理请求体的写入
@@ -117,6 +113,9 @@ proxy.on('proxyRes', (proxyRes: http.IncomingMessage, req: http.IncomingMessage,
         return;
       } else {
         console.error(chalk.red(`  响应体为空，已达到最大重试次数 (${MAX_RETRIES})。`));
+        // 增加失败统计
+        publishMqtt(`${MQTT_TOPIC_PREFIX}daily/failures`, (dailyFailures + 1).toString(), true);
+        publishMqtt(`${MQTT_TOPIC_PREFIX}total/failures`, (totalFailures + 1).toString(), true);
         if (!res.headersSent) {
           res.writeHead(502, { 'Content-Type': 'text/plain' });
           res.end('目标服务器响应体为空且重试失败。');
@@ -124,12 +123,11 @@ proxy.on('proxyRes', (proxyRes: http.IncomingMessage, req: http.IncomingMessage,
       }
     } else { // 响应体不为空
       const currentRetry = requestRetryCounts.get(req) || 0;
-      if (currentRetry === 0) { // 并且没有重试过
-        // dailySuccess++; // 已经在 mqttService 中处理
-        // totalSuccess++; // 已经在 mqttService 中处理
-        publishMqtt(`${MQTT_TOPIC_PREFIX}daily/success`, (dailySuccess + 1).toString(), true);
-        publishMqtt(`${MQTT_TOPIC_PREFIX}total/success`, (totalSuccess + 1).toString(), true);
-      }
+      // 成功，根据重试次数更新统计
+      const currentDailySuccessCount = dailySuccessByRetries.get(currentRetry) || 0;
+      const currentTotalSuccessCount = totalSuccessByRetries.get(currentRetry) || 0;
+      publishMqtt(`${MQTT_TOPIC_PREFIX}daily/success/${currentRetry}`, (currentDailySuccessCount + 1).toString(), true);
+      publishMqtt(`${MQTT_TOPIC_PREFIX}total/success/${currentRetry}`, (currentTotalSuccessCount + 1).toString(), true);
     }
     res.end(); // 结束客户端响应
     log(LogLevel.MINIMAL, `响应流结束，传输了 ${fullResponseBody.length} 字节。`);
@@ -142,10 +140,14 @@ export const setupProxy = (req: http.IncomingMessage, res: http.ServerResponse) 
   requestRetryCounts.delete(req); // 清除当前请求的重试计数
   requestBodies.delete(req); // 清除当前请求的请求体
 
-  // dailyRequests++; // 已经在 mqttService 中处理
-  // totalRequests++; // 已经在 mqttService 中处理
+  // 增加总请求数
   publishMqtt(`${MQTT_TOPIC_PREFIX}daily/requests`, (dailyRequests + 1).toString(), true);
   publishMqtt(`${MQTT_TOPIC_PREFIX}total/requests`, (totalRequests + 1).toString(), true);
+
+  // 如果重试次数达到最大限制且仍然失败，则计为失败
+  // 在这里判断请求是否最终失败（重试次数达到上限且响应体为空）
+  // 这个逻辑应该在 proxyRes.on('end') 中处理，因为只有在那里才能确定最终的成功或失败状态
+  // 这里的 currentRetry 是指初始请求的重试次数，而不是最终的重试次数
 
   log(LogLevel.NORMAL, '接收到请求', { method: req.method, url: req.url, headers: req.headers });
 
