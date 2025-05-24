@@ -261,6 +261,15 @@ const server = http.createServer((req, res) => {
 
 // 监听 proxyReq 事件，用于在代理请求发送前写入请求体
 proxy.on('proxyReq', (proxyReq: http.ClientRequest, req: http.IncomingMessage, res: http.ServerResponse, options: httpProxy.ServerOptions) => {
+  // 移除所有 x-forwarded 和 x-real 相关的请求头
+  const headers = proxyReq.getHeaders(); // 获取所有请求头
+  for (const headerName in headers) {
+    if (headerName.toLowerCase().startsWith('x-forwarded-') || headerName.toLowerCase().startsWith('x-real-')) {
+      proxyReq.removeHeader(headerName); // 使用 removeHeader 方法移除
+      log(LogLevel.VERBOSE, `已移除代理请求头: ${headerName}`);
+    }
+  }
+
   const retryBody = requestBodies.get(req);
   if (retryBody) {
     // 确保设置 Content-Length 头，否则目标服务器可能无法正确解析请求体
