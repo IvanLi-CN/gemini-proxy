@@ -1,109 +1,125 @@
-# 项目计划：Bun + TypeScript 反向代理服务器
+# 代理服务器配置动态化计划
 
-**目标：**
-创建一个 Bun + TypeScript 项目，实现一个反向代理服务器，将 `http://localhost:25055` 的请求代理到 `https://example.com`，并记录所有请求和响应，处理 CORS，以及进行错误处理。
+## 目标
 
-**核心功能：**
+将 `src/index.ts` 中的硬编码配置项 (`TARGET_IP`, `TARGET_PORT`, `TARGET_DOMAIN`, `PORT`, `HOST`, `MAX_RETRIES`) 替换为通过环境变量或命令行参数动态获取。
 
-1. **反向代理：** 将传入请求转发到目标 URL。
-2. **请求/响应日志：** 记录所有请求和对应的响应数据。
-3. **CORS 处理：** 确保跨域请求能够正确处理。
-4. **错误处理：** 捕获代理过程中的错误并提供友好的错误响应。
+## 方案概述
 
-**技术栈：**
+我们将使用 `process.env` 来读取环境变量，并使用 `minimist` 库来解析命令行参数。如果环境变量和命令行参数都存在，命令行参数将优先。`TARGET_IP` 和 `TARGET_DOMAIN` 之间存在联动关系：如果其中一个未设置（即使用了默认值），则使用另一个的值；如果两者都未设置，则使用默认值。
 
-* **运行时：** Bun
-* **语言：** TypeScript
+## 详细步骤
 
-**详细步骤：**
+1. **安装依赖：**
+    * 安装 `minimist` 用于解析命令行参数。
 
-#### 1. 项目初始化
+2. **修改 `src/index.ts`：**
+    * 导入 `minimist`。
+    * 定义一个函数来获取配置值，该函数将检查命令行参数，然后检查环境变量，并提供默认值。
+    * 将 `TARGET_IP`、`TARGET_PORT`、`TARGET_DOMAIN`、`PORT`、`HOST` 和 `MAX_RETRIES` 的定义替换为调用此函数来获取值。
+    * 更新 `https.Agent` 和 `httpProxy.createProxyServer` 中的相关配置，确保它们使用动态获取的值。
+    * 更新启动日志信息，以反映配置值的来源。
 
-* **初始化 Bun 项目：** 在当前项目根目录 `/Volumes/ExData/Projects/Ivan/gemini-proxy` 中运行 `bun init` 来初始化 TypeScript 项目（如果尚未初始化）。
-* **安装依赖：** 可能会需要安装一些用于日志记录或 HTTP 代理的库，例如 `node-fetch` (如果 Bun 内置的 fetch 不够用) 或其他日志库。
-
-#### 2. HTTP 服务器设置
-
-* **创建入口文件：** 在 `src` 目录下创建 `index.ts` 作为服务器的入口文件。
-* **启动 Bun HTTP 服务器：** 使用 Bun 的内置 HTTP 服务器功能，监听 `http://localhost:25055`。
-
-#### 3. 反向代理实现
-
-* **请求转发：**
-  * 当接收到来自客户端的请求时，解析请求的 URL、方法、请求头和请求体。
-  * 构建一个新的请求，目标 URL 为 `https://example.com` 加上原始请求的路径和查询参数。
-  * 将原始请求的请求头（除了可能引起问题的，如 `Host`、`Connection` 等）转发到目标服务器。
-  * 将原始请求的请求体转发到目标服务器。
-  * 使用 `fetch` 或其他 HTTP 客户端库向目标服务器发起请求。
-* **响应转发：**
-  * 接收目标服务器的响应。
-  * 将目标服务器的响应状态码、响应头（除了可能引起问题的，如 `Content-Encoding`、`Transfer-Encoding` 等）转发回客户端。
-  * 将目标服务器的响应体转发回客户端。
-
-#### 4. 请求和响应日志记录与控制台输出
-
-* **控制台彩色输出：**
-  * 使用 `chalk` 或 `colors.js` 等库，以美观、带有颜色的方式在控制台输出请求的方法、URL、请求头、请求体。
-  * 同样，以彩色方式输出响应的状态码、响应头、响应体。
-  * 对于请求体和响应体，需要确保能够正确读取并打印，同时不影响流式传输。
-* **日志文件记录（可选）：**
-  * 在项目根目录下创建 `logs` 文件夹。
-  * 日志文件将按日期命名，例如 `YYYY-MM-DD.log`。
-  * 日志内容将包括请求的唯一 ID、时间戳、客户端 IP、请求方法、原始 URL、请求头、请求体、响应状态码、响应头、响应体。
-  * 所有日志条目都将是 JSON 格式，方便后续分析。
-  * 确保日志写入是非阻塞的，以避免影响代理性能。
-
-#### 5. CORS 处理
-
-* **预检请求 (OPTIONS)：**
-  * 当接收到 OPTIONS 请求时，检查 `Origin`、`Access-Control-Request-Method` 和 `Access-Control-Request-Headers`。
-  * 根据需要设置 `Access-Control-Allow-Origin`、`Access-Control-Allow-Methods`、`Access-Control-Allow-Headers`、`Access-Control-Max-Age` 等响应头。
-  * 直接返回 204 No Content 响应。
-* **实际请求：**
-  * 对于非 OPTIONS 请求，在代理响应中添加 `Access-Control-Allow-Origin` 等 CORS 相关的响应头，确保浏览器允许跨域访问。
-
-#### 6. 错误处理
-
-* **捕获错误：** 使用 `try-catch` 块捕获代理过程中可能发生的网络错误、上游服务错误等。
-* **错误日志：** 将错误信息（包括错误类型、错误消息、堆栈跟踪、相关请求信息）记录到日志文件中。
-* **通用错误响应：** 当发生错误时，向客户端返回一个通用的错误响应（例如 500 Internal Server Error），避免暴露内部错误细节。
-
-**代理流程图：**
+## Mermaid 流程图
 
 ```mermaid
 graph TD
-    A[客户端请求] --> B{Bun Proxy Server};
-    B -- 监听 http://localhost:25055 --> C{请求处理};
-    C -- 记录请求日志 --> D[日志文件 (logs/YYYY-MM-DD.log)];
-    C -- 检查是否为 OPTIONS 请求 --> E{CORS 处理};
-    E -- 是 --> F[返回 CORS 响应];
-    E -- 否 --> G{构建代理请求};
-    G -- 转发请求头/体 --> H[目标服务器: https://example.com];
-    H -- 响应 --> I{接收目标响应};
-    I -- 记录响应日志 --> D;
-    I -- 转发响应头/体 --> J{返回客户端响应};
-    J --> A;
-    C -- 错误发生 --> K{错误处理};
-    K -- 记录错误日志 --> D;
-    K -- 返回通用错误响应 --> J;
+    A[开始] --> B{解析命令行参数};
+    B --> C{读取环境变量};
+    C --> D[定义配置获取函数];
+    D --> E[使用函数获取 TARGET_IP];
+    E --> F[使用函数获取 TARGET_PORT];
+    F --> G[使用函数获取 TARGET_DOMAIN];
+    G --> H[使用函数获取 PORT];
+    H --> H2[使用函数获取 HOST];
+    H2 --> H3[使用函数获取 MAX_RETRIES];
+    H3 --> I[更新 https.Agent 配置];
+    I --> J[更新 httpProxy.createProxyServer 配置];
+    J --> K[更新启动日志];
+    K --> L[完成];
 ```
 
-#### 7. 确保响应流式传输
+## 具体代码修改思路
 
-* `Bun.serve` 和 `http-proxy` 库通常默认支持流式传输。在实现请求和响应体日志记录时，需要特别注意，确保在不影响流式传输的前提下捕获并打印响应体。这可能涉及到复制响应流。
+1. **安装 `minimist`:**
 
-**项目结构（初步设想）：**
+    ```bash
+    bun add minimist
+    ```
 
-```
-.
-├── src/
-│   ├── index.ts          # 服务器入口文件，包含代理逻辑
-│   ├── utils/            # 工具函数，例如日志记录、CORS 处理
-│   │   └── logger.ts
-│   └── types/            # 类型定义
-│       └── index.ts
-├── logs/                 # 日志文件存放目录 (可选，如果需要文件日志)
-├── package.json
-├── bun.lockb
-├── tsconfig.json
-└── README.md
+2. **`src/index.ts` 修改：**
+
+    * **导入 `minimist`:**
+        在文件顶部添加：
+
+        ```typescript
+        import minimist from 'minimist';
+        ```
+
+    * **获取命令行参数:**
+        在现有变量定义之前添加：
+
+        ```typescript
+        const argv = minimist(process.argv.slice(2), {
+          alias: {
+            p: 'port',
+            h: 'host',
+            r: 'maxRetries',
+            i: 'targetIp',
+            d: 'targetDomain'
+          }
+        });
+        ```
+
+    * **定义配置获取函数和变量:**
+        替换现有变量的定义：
+
+        ```typescript
+        const getConfig = (envVar: string, argName: string, defaultValue: string | number): { value: string | number, isDefault: boolean } => {
+          if (argv[argName] !== undefined) {
+            // 命令行参数优先
+            return { value: typeof defaultValue === 'number' ? Number(argv[argName]) : String(argv[argName]), isDefault: false };
+          }
+          if (process.env[envVar] !== undefined) {
+            // 环境变量次之
+            return { value: typeof defaultValue === 'number' ? Number(process.env[envVar]) : String(process.env[envVar]), isDefault: false };
+          }
+          return { value: defaultValue, isDefault: true }; // 默认值
+        };
+
+        let targetIpConfig = getConfig('TARGET_IP', 'targetIp', 'example.com');
+        let targetDomainConfig = getConfig('TARGET_DOMAIN', 'targetDomain', 'example.com');
+
+        let TARGET_IP = targetIpConfig.value as string;
+        let TARGET_DOMAIN = targetDomainConfig.value as string;
+
+        // 如果其中一个没有设置，则默认使用对方的值
+        if (targetIpConfig.isDefault && !targetDomainConfig.isDefault) {
+          TARGET_IP = TARGET_DOMAIN;
+        } else if (targetDomainConfig.isDefault && !targetIpConfig.isDefault) {
+          TARGET_DOMAIN = TARGET_IP;
+        }
+
+        const TARGET_PORT = getConfig('TARGET_PORT', 'targetPort', 443).value as number;
+        const PORT = getConfig('PORT', 'port', 25055).value as number;
+        const HOST = getConfig('HOST', 'host', '0.0.0.0').value as string;
+        const MAX_RETRIES = getConfig('MAX_RETRIES', 'maxRetries', 9).value as number;
+        ```
+
+    * **更新 `server.listen`:**
+        将 `server.listen(PROXY_PORT, ...)` 修改为 `server.listen(PORT, HOST, ...)`。
+
+## 验证方式
+
+1. 通过命令行参数启动代理服务器，验证配置是否生效。
+    `bun run src/index.ts --target-ip=1.2.3.4 --target-port=8080 --target-domain=example.com --port=3000 --host=0.0.0.0 --max-retries=5`
+    或使用简写：
+    `bun run src/index.ts -i 1.2.3.4 -d example.com -p 3000 -h 0.0.0.0 -r 5`
+2. 通过环境变量启动代理服务器，验证配置是否生效。
+    `TARGET_IP=5.6.7.8 TARGET_PORT=9090 TARGET_DOMAIN=test.com PORT=4000 HOST=127.0.0.1 MAX_RETRIES=3 bun run src/index.ts`
+3. 同时使用命令行参数和环境变量，验证命令行参数是否优先。
+    `TARGET_IP=5.6.7.8 bun run src/index.ts -i 1.2.3.4` (此时 `TARGET_IP` 应该是 `1.2.3.4`)
+4. **测试联动逻辑：**
+    * 只设置 `TARGET_IP`：`bun run src/index.ts -i 192.168.1.1` (此时 `TARGET_DOMAIN` 也会是 `192.168.1.1`)
+    * 只设置 `TARGET_DOMAIN`：`bun run src/index.ts -d myapi.com` (此时 `TARGET_IP` 也会是 `myapi.com`)
+    * 两者都不设置：`bun run src/index.ts` (此时 `TARGET_IP` 和 `TARGET_DOMAIN` 都会是 `example.com`)

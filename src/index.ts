@@ -4,13 +4,47 @@ import https from 'https'; // 导入 https 模块
 import httpProxy from 'http-proxy';
 import net from 'net';
 import chalk from 'chalk';
+import minimist from 'minimist'; // 导入 minimist
 
-const TARGET_IP = 'example.com'; // 目标 IP
-const TARGET_PORT = 443; // 目标端口，HTTPS 默认为 443
-const TARGET_DOMAIN = 'example.com'; // 目标域名，用于 Host 头和 SNI
-const PROXY_PORT = 25055; // 代理服务器监听端口
+const argv = minimist(process.argv.slice(2), {
+  alias: {
+    p: 'port',
+    h: 'host',
+    r: 'maxRetries', // 'r' for retries
+    i: 'targetIp',   // 'i' for IP
+    d: 'targetDomain' // 'd' for domain
+  }
+});
 
-const MAX_RETRIES = 9;
+const getConfig = (envVar: string, argName: string, defaultValue: string | number): { value: string | number, isDefault: boolean } => {
+  if (argv[argName] !== undefined) {
+    // 命令行参数优先
+    return { value: typeof defaultValue === 'number' ? Number(argv[argName]) : String(argv[argName]), isDefault: false };
+  }
+  if (process.env[envVar] !== undefined) {
+    // 环境变量次之
+    return { value: typeof defaultValue === 'number' ? Number(process.env[envVar]) : String(process.env[envVar]), isDefault: false };
+  }
+  return { value: defaultValue, isDefault: true }; // 默认值
+};
+
+let targetIpConfig = getConfig('TARGET_IP', 'targetIp', 'example.com');
+let targetDomainConfig = getConfig('TARGET_DOMAIN', 'targetDomain', 'example.com');
+
+let TARGET_IP = targetIpConfig.value as string;
+let TARGET_DOMAIN = targetDomainConfig.value as string;
+
+// 如果其中一个没有设置，则默认使用对方的值
+if (targetIpConfig.isDefault && !targetDomainConfig.isDefault) {
+  TARGET_IP = TARGET_DOMAIN;
+} else if (targetDomainConfig.isDefault && !targetIpConfig.isDefault) {
+  TARGET_DOMAIN = TARGET_IP;
+}
+
+const TARGET_PORT = getConfig('TARGET_PORT', 'targetPort', 443).value as number;
+const PORT = getConfig('PORT', 'port', 25055).value as number; // PROXY_PORT 更名为 PORT
+const HOST = getConfig('HOST', 'host', '0.0.0.0').value as string; // 新增 HOST
+const MAX_RETRIES = getConfig('MAX_RETRIES', 'maxRetries', 9).value as number;
 const requestRetryCounts = new Map<http.IncomingMessage, number>();
 const requestBodies = new Map<http.IncomingMessage, Buffer>(); // 用于存储请求体
 
@@ -190,6 +224,6 @@ proxy.on('proxyRes', (proxyRes: http.IncomingMessage, req: http.IncomingMessage,
   });
 });
 
-server.listen(PROXY_PORT, () => {
-  console.log(chalk.green(`代理服务器正在监听 http://localhost:${PROXY_PORT}，代理到 https://${TARGET_IP}:${TARGET_PORT} (Host: ${TARGET_DOMAIN})`));
+server.listen(PORT, HOST, () => {
+  console.log(chalk.green(`代理服务器正在监听 http://${HOST}:${PORT}，代理到 https://${TARGET_IP}:${TARGET_PORT} (Host: ${TARGET_DOMAIN})`));
 });
