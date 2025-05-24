@@ -1,41 +1,107 @@
-# MQTT 统计数据持久化计划
+# 优雅退出实现计划
 
-## 目标
-在 MQTT 客户端连接成功后，从 MQTT Broker 读取并初始化统计数据，并确保统计数据在发布时被保留。
+**目标：** 确保在接收到终止信号时，HTTP 服务器和 MQTT 客户端能够优雅地关闭，从而避免Docker停止容器时等待时间过长。
 
-## 详细计划
+**步骤：**
 
-**步骤**:
+1.  **修改 `src/mqttService.ts`：**
+    *   导出一个 `closeMqttClient` 函数，用于断开 MQTT 连接并清除 `dailyResetInterval`。
+    *   修改 `initMqttService`，使其返回 `mqttClient` 实例，或者确保 `mqttClient` 可以在模块外部访问（目前已是模块级别变量，但需要一个关闭函数）。
 
-1.  **修改 `publishMqtt` 函数以支持保留消息**:
-    *   在 `src/mqttService.ts` 中，修改 `publishMqtt` 函数，增加一个 `retain` 参数，默认为 `false`。
-    *   当发布统计数据时，将 `retain` 参数设置为 `true`。
+2.  **修改 `src/index.ts`：**
+    *   导入 `closeMqttClient` 函数。
+    *   在 `server.listen` 之后，添加信号处理逻辑，监听 `SIGTERM` 和 `SIGINT` 信号。
+    *   在信号处理函数中，首先关闭 HTTP 服务器，然后调用 `closeMqttClient`。
+    *   确保在所有连接关闭后，进程退出。
 
-2.  **在 `initMqttService` 中订阅统计主题并读取保留消息**:
-    *   在 `src/mqttService.ts` 的 `mqttClient.on('connect', ...)` 回调中，添加订阅统计主题的逻辑。
-    *   订阅的主题将是 `gemini-proxy/stats/daily/requests`、`gemini-proxy/stats/daily/retries`、`gemini-proxy/stats/daily/success`、`gemini-proxy/stats/total/requests`、`gemini-proxy/stats/total/retries`、`gemini-proxy/stats/total/success`。
-    *   在 `mqttClient.on('message', ...)` 回调中，解析收到的消息，并更新对应的 `dailyRequests`、`dailyRetries` 等变量。需要注意消息的类型（字符串）转换为数字。
-
-3.  **修改 `resetDailyStats` 函数以发布保留消息**:
-    *   在 `src/mqttService.ts` 的 `resetDailyStats` 函数中，当发布 0 值时，确保这些消息也被标记为保留消息。
-
-4.  **更新统计数据时发布保留消息**:
-    *   在代码中任何更新 `dailyRequests`、`totalRequests` 等变量的地方，确保在发布这些更新时，也将其作为保留消息发布。这可能涉及到在 `proxyHandler.ts` 或其他相关文件中调用 `publishMqtt` 时，将 `retain` 参数设置为 `true`。
-
-## Mermaid 图示
+**详细计划图：**
 
 ```mermaid
 graph TD
-    A[应用启动] --> B{MQTT_BROKER_URL 是否配置?};
-    B -- 是 --> C[初始化 MQTT 客户端];
-    C --> D[MQTT 客户端连接];
-    D -- 连接成功 --> E[订阅统计主题];
-    E --> F[接收保留消息];
-    F --> G[更新本地统计变量];
-    G --> H[调度每日重置];
-    H --> I[每日重置];
-    I --> J[发布重置后的统计数据 (保留消息)];
-    K[统计数据更新] --> L[发布更新后的统计数据 (保留消息)];
-    G -- 持续运行 --> K;
-    I -- 持续运行 --> I;
-    B -- 否 --> M[跳过 MQTT 统计];
+    A[应用程序启动] --> B{初始化 HTTP 服务器和 MQTT 服务};
+    B --> C[HTTP 服务器监听端口];
+    B --> D[MQTT 客户端连接 Broker];
+    C --> E[监听 SIGTERM/SIGINT 信号];
+    D --> E;
+    E -- 接收到信号 --> F[执行优雅退出处理函数];
+    F --> G[关闭 HTTP 服务器];
+    F --> H[关闭 MQTT 客户端];
+    H --> I[清除每日统计重置定时器];
+    G & H & I --> J[进程退出];
+```
+
+**具体代码修改思路：**
+
+*   **`src/mqttService.ts`**
+    ```typescript
+    // ... 现有代码 ...
+
+    export const closeMqttClient = async () => {
+      if (dailyResetInterval) {
+        clearInterval(dailyResetInterval);
+        dailyResetInterval = null;
+        console.log(chalk.green('每日统计重置定时器已清除。'));
+      }
+      if (mqttClient && mqttClient.connected) {
+        await new Promise<void>((resolve) => {
+          mqttClient?.end(false, () => { // false 表示不强制关闭，等待消息发送完成
+            console.log(chalk.green('MQTT 客户端已断开连接。'));
+            resolve();
+          });
+        });
+      } else if (mqttClient) {
+        console.log(chalk.yellow('MQTT 客户端未连接或已关闭。'));
+      }
+    };
+
+    // ... 现有代码 ...
+    ```
+
+*   **`src/index.ts`**
+    ```typescript
+    import http from 'http';
+    import { PORT, HOST, TARGET_IP, TARGET_PORT, TARGET_DOMAIN } from './config';
+    import { LogLevel } from './config';
+    import { initMqttService, closeMqttClient } from './mqttService'; // 导入 closeMqttClient
+    import { setupProxy } from './proxyHandler';
+    import chalk from 'chalk';
+
+    // 初始化 MQTT 服务
+    initMqttService();
+
+    // 监听代理请求
+    const server = http.createServer((req, res) => {
+      setupProxy(req, res);
+    });
+
+    server.listen(PORT, HOST, () => {
+      console.log(chalk.green(`代理服务器正在监听 http://${HOST}:${PORT}，代理到 https://${TARGET_IP}:${TARGET_PORT} (Host: ${TARGET_DOMAIN})`));
+    });
+
+    // 优雅退出处理
+    const gracefulShutdown = async () => {
+      console.log(chalk.blue('收到终止信号，开始优雅退出...'));
+
+      // 关闭 HTTP 服务器
+      await new Promise<void>((resolve) => {
+        server.close((err) => {
+          if (err) {
+            console.error(chalk.red('关闭 HTTP 服务器时发生错误:'), err);
+            resolve(); // 即使有错误也继续
+          } else {
+            console.log(chalk.green('HTTP 服务器已关闭。'));
+            resolve();
+          }
+        });
+      });
+
+      // 关闭 MQTT 客户端
+      await closeMqttClient();
+
+      console.log(chalk.green('所有服务已关闭，进程退出。'));
+      process.exit(0);
+    };
+
+    // 监听终止信号
+    process.on('SIGTERM', gracefulShutdown);
+    process.on('SIGINT', gracefulShutdown);

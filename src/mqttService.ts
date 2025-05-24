@@ -147,3 +147,21 @@ export const initMqttService = () => {
     console.warn(chalk.yellow('未配置 MQTT_BROKER_URL，将跳过 MQTT 统计。'));
   }
 };
+
+export const closeMqttClient = async () => {
+  if (dailyResetInterval) {
+    clearInterval(dailyResetInterval);
+    dailyResetInterval = null;
+    console.log(chalk.green('每日统计重置定时器已清除。'));
+  }
+  if (mqttClient && mqttClient.connected) {
+    await new Promise<void>((resolve) => {
+      mqttClient?.end(false, () => { // false 表示不强制关闭，等待消息发送完成
+        console.log(chalk.green('MQTT 客户端已断开连接。'));
+        resolve();
+      });
+    });
+  } else if (mqttClient) {
+    console.log(chalk.yellow('MQTT 客户端未连接或已关闭。'));
+  }
+};
