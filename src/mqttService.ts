@@ -5,6 +5,7 @@ import { log } from './logger';
 import { LogLevel } from './config';
 
 let mqttClient: mqtt.MqttClient | null = null;
+let dailyResetInterval: NodeJS.Timeout | null = null; // 用于存储 setInterval 的 ID
 export const MQTT_TOPIC_PREFIX = 'gemini-proxy/stats/';
 
 export let dailyRequests = 0;
@@ -47,8 +48,11 @@ export const scheduleDailyReset = () => {
 
   setTimeout(() => {
     resetDailyStats();
-    // 每天重复调度
-    setInterval(resetDailyStats, 24 * 60 * 60 * 1000);
+    // 每天重复调度，确保只有一个 setInterval 在运行
+    if (dailyResetInterval) {
+      clearInterval(dailyResetInterval);
+    }
+    dailyResetInterval = setInterval(resetDailyStats, 24 * 60 * 60 * 1000);
   }, timeToNextMidnight);
 };
 

@@ -36,6 +36,8 @@ proxy.on('error', (err: Error, req: http.IncomingMessage, res: http.ServerRespon
   if (res instanceof http.ServerResponse) {
     res.writeHead(500, { 'Content-Type': 'text/plain' });
     res.end(`代理服务器内部错误: ${err.message}. 请检查目标URL的SSL证书或网络环境。`);
+    requestRetryCounts.delete(req); // 清除当前请求的重试计数
+    requestBodies.delete(req); // 清除当前请求的请求体
   } else {
     console.error(chalk.red('代理错误：响应对象不是 http.ServerResponse 类型。'), err);
   }
@@ -131,6 +133,8 @@ proxy.on('proxyRes', (proxyRes: http.IncomingMessage, req: http.IncomingMessage,
     }
     res.end(); // 结束客户端响应
     log(LogLevel.MINIMAL, `响应流结束。`);
+    requestRetryCounts.delete(req); // 清除当前请求的重试计数
+    requestBodies.delete(req); // 清除当前请求的请求体
   });
 });
 
