@@ -131,7 +131,7 @@ export const initMqttService = () => {
     });
 
     mqttClient.on('error', (err) => {
-      console.error(chalk.red('MQTT 客户端错误:'), err);
+      console.error(chalk.red('MQTT 连接错误，请检查 Broker 地址、端口、网络连接或 SSL/TLS 配置:'), err);
     });
 
     mqttClient.on('offline', () => {

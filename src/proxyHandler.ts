@@ -132,7 +132,7 @@ proxy.on('proxyRes', (proxyRes: http.IncomingMessage, req: http.IncomingMessage,
       }
     }
     res.end(); // 结束客户端响应
-    log(LogLevel.MINIMAL, `响应流结束。`);
+    log(LogLevel.MINIMAL, `响应流结束，传输了 ${fullResponseBody.length} 字节。`);
     requestRetryCounts.delete(req); // 清除当前请求的重试计数
     requestBodies.delete(req); // 清除当前请求的请求体
   });
