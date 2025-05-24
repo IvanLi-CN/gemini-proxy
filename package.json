@@ -1,0 +1,22 @@
+{
+  "name": "gemini-proxy",
+  "module": "src/index.ts",
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "build": "bun tsc"
+  },
+  "devDependencies": {
+    "@types/http-proxy": "^1.17.16",
+    "bun-types": "latest",
+    "tsx": "^4.19.4"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "http-proxy": "^1.18.1",
+    "json-colorizer": "^3.0.1"
+  }
+}
