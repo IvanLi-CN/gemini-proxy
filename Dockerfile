@@ -1,6 +1,7 @@
 # 使用 Bun 官方镜像作为基础镜像
 FROM oven/bun:latest
 
+
 # 设置工作目录
 WORKDIR /app
 

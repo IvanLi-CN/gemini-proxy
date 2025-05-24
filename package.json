@@ -1,7 +1,29 @@
 {
   "name": "gemini-proxy",
+  "description": "A reverse proxy for Gemini API requests with automatic retry on empty responses, implemented using TypeScript and Bun.",
+  "author": {
+    "name": "Ivan Li",
+    "email": "ivanli2048@gmail.com"
+  },
+  "version": "0.1.0",
+  "license": "MIT",
+  "keywords": [
+    "gemini",
+    "proxy",
+    "api",
+    "typescript",
+    "bun",
+    "retry"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/IvanLi-CN/gemini-proxy.git"
+  },
   "module": "src/index.ts",
   "type": "module",
+  "engines": {
+    "bun": ">=1.0.0"
+  },
   "scripts": {
     "start": "bun run src/index.ts",
     "build": "bun tsc"
@@ -9,8 +31,7 @@
   "devDependencies": {
     "@types/http-proxy": "^1.17.16",
     "@types/prettyjson": "^0.0.33",
-    "bun-types": "latest",
-    "tsx": "^4.19.4"
+    "bun-types": "latest"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
